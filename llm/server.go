@@ -678,8 +678,12 @@ func (s *ollamaServer) Load(ctx context.Context, gpus discover.GpuInfoList, requ
 
 	if !(len(gpus) == 1 && gpus[0].Library == "cpu") {
 		for _, gpu := range gpus {
+			available := gpu.FreeMemory - envconfig.GpuOverhead() - gpu.MinimumMemory
+			if gpu.FreeMemory < envconfig.GpuOverhead()+gpu.MinimumMemory {
+				available = 0
+			}
 			slog.Info("gpu memory", "id", gpu.ID,
-				"available", format.HumanBytes2(gpu.FreeMemory-envconfig.GpuOverhead()-gpu.MinimumMemory),
+				"available", format.HumanBytes2(available),
 				"free", format.HumanBytes2(gpu.FreeMemory),
 				"minimum", format.HumanBytes2(gpu.MinimumMemory),
 				"overhead", format.HumanBytes2(envconfig.GpuOverhead()))
@@ -861,7 +865,7 @@ func (s *ollamaServer) createLayout(systemInfo discover.SystemInfo, systemGPUs d
 		}
 		layers[i] += memory.CPU.Weights[i].Size
 		layers[i] += memory.CPU.Cache[i].Size
-		slog.Log(context.TODO(), logutil.LevelTrace, "layer to assign", "layer", i, "size", format.HumanBytes2(layers[i]))
+		logutil.Trace("layer to assign", "layer", i, "size", format.HumanBytes2(layers[i]))
 	}
 
 	gpuLayers := ml.GPULayersList{}
