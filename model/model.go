@@ -5,7 +5,6 @@ import (
 	"fmt"
 	_ "image/jpeg"
 	_ "image/png"
-	"math"
 	"os"
 	"reflect"
 	"strconv"
@@ -21,10 +20,15 @@ import (
 	"github.com/ollama/ollama/logutil"
 	"github.com/ollama/ollama/ml"
 	_ "github.com/ollama/ollama/ml/backend"
+	"github.com/ollama/ollama/ml/nn/pooling"
 	"github.com/ollama/ollama/model/input"
 )
 
-var ErrNoVisionModel = errors.New("this model is missing data required for image input")
+var (
+	ErrNoVisionModel        = errors.New("this model is missing data required for image input")
+	ErrUnsupportedModel     = errors.New("model not supported")
+	ErrUnsupportedTokenizer = errors.New("tokenizer not supported")
+)
 
 // Model implements a specific model architecture, defining the forward pass and any model-specific configuration
 type Model interface {
@@ -103,23 +107,12 @@ func New(modelPath string, params ml.BackendParams) (Model, error) {
 		return nil, err
 	}
 
-	arch := b.Config().Architecture()
-	if b.Config().Uint("pooling_type", math.MaxUint32) != math.MaxUint32 {
-		arch = arch + "_embed"
-	}
-
-	f, ok := models[arch]
-	if !ok {
-		return nil, fmt.Errorf("unsupported model architecture %q", arch)
-	}
-
-	m, err := f(b.Config())
+	m, err := modelForArch(b.Config())
 	if err != nil {
 		return nil, err
 	}
 
 	base := Base{b: b, config: m.Config()}
-
 	v := reflect.ValueOf(m)
 	v.Elem().Set(populateFields(base, v.Elem()))
 	return m, nil
@@ -131,28 +124,36 @@ func NewTextProcessor(s string) (TextProcessor, error) {
 		return nil, err
 	}
 	defer r.Close()
+
 	meta, err := fsggml.Decode(r, -1)
 	if err != nil {
 		return nil, err
 	}
-	return getTextProcessor(meta.KV())
-}
 
-func getTextProcessor(kv fsggml.KV) (TextProcessor, error) {
-	arch := kv.Architecture()
-	f, ok := models[arch]
-	if !ok {
-		return nil, fmt.Errorf("unsupported model architecture %q", arch)
-	}
-	m, err := f(kv)
+	m, err := modelForArch(meta.KV())
 	if err != nil {
 		return nil, err
 	}
+
 	tp, ok := m.(TextProcessor)
 	if !ok {
-		return nil, fmt.Errorf("%v is not a TextProcessor", m)
+		return nil, ErrUnsupportedTokenizer
 	}
 	return tp, nil
+}
+
+func modelForArch(c fs.Config) (Model, error) {
+	arch := c.Architecture()
+	if pooling.Type(c.Uint("pooling_type")) != pooling.TypeNone {
+		arch = arch + "_embed"
+	}
+
+	f, ok := models[arch]
+	if !ok {
+		return nil, ErrUnsupportedModel
+	}
+
+	return f(c)
 }
 
 func populateFields(base Base, v reflect.Value, tags ...Tag) reflect.Value {
@@ -242,7 +243,7 @@ func setPointer(base Base, v reflect.Value, tags []Tag) {
 		vv = vv.Elem()
 	}
 
-	vv = vv.Elem()
+	vv = reflect.Indirect(vv)
 	if v.IsNil() {
 		vv = reflect.New(v.Type().Elem()).Elem()
 	}
