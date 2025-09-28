@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/ollama/ollama/api"
 	"github.com/ollama/ollama/logutil"
@@ -31,6 +32,7 @@ const (
 type Qwen3CoderParser struct {
 	state qwenParserState
 	acc   strings.Builder
+	tools []api.Tool
 }
 
 func (p *Qwen3CoderParser) HasToolSupport() bool {
@@ -41,7 +43,12 @@ func (p *Qwen3CoderParser) HasThinkingSupport() bool {
 	return false
 }
 
-func (p *Qwen3CoderParser) Add(s string, tools []api.Tool) (content string, thinking string, calls []api.ToolCall, err error) {
+func (p *Qwen3CoderParser) Init(tools []api.Tool, lastMessage *api.Message) []api.Tool {
+	p.tools = tools
+	return tools // Qwen doesn't modify tools
+}
+
+func (p *Qwen3CoderParser) Add(s string, done bool) (content string, thinking string, calls []api.ToolCall, err error) {
 	p.acc.WriteString(s)
 
 	events := p.parseEvents()
@@ -51,7 +58,7 @@ func (p *Qwen3CoderParser) Add(s string, tools []api.Tool) (content string, thin
 	for _, event := range events {
 		switch event := event.(type) {
 		case qwenEventRawToolCall:
-			toolCall, err := parseToolCall(event, tools)
+			toolCall, err := parseToolCall(event, p.tools)
 			if err != nil {
 				slog.Warn("qwen tool call parsing failed", "error", err)
 				return "", "", nil, err
@@ -198,12 +205,21 @@ func overlap(s, delim string) int {
 }
 
 func trailingWhitespaceLen(s string) int {
-	for i := len(s) - 1; i >= 0; i-- {
-		if !unicode.IsSpace(rune(s[i])) {
-			return len(s) - i - 1
+	remaining := s
+	total := 0
+	for len(remaining) > 0 {
+		r, size := utf8.DecodeLastRuneInString(remaining)
+		// if it's an invalid utf8 rune, assume it isn't whitespace
+		if r == utf8.RuneError && size == 1 {
+			break
 		}
+		if !unicode.IsSpace(r) {
+			break
+		}
+		total += size
+		remaining = remaining[:len(remaining)-size]
 	}
-	return len(s)
+	return total
 }
 
 type XMLFunctionCall struct {
@@ -359,7 +375,7 @@ func parseValue(raw string, paramType api.PropertyType) any {
 
 	// Try array
 	if typeSet["array"] {
-		var arr []interface{}
+		var arr []any
 		if err := json.Unmarshal([]byte(raw), &arr); err == nil {
 			return arr
 		}
@@ -371,7 +387,7 @@ func parseValue(raw string, paramType api.PropertyType) any {
 
 	// Try object
 	if typeSet["object"] {
-		var obj map[string]interface{}
+		var obj map[string]any
 		if err := json.Unmarshal([]byte(raw), &obj); err == nil {
 			return obj
 		}
