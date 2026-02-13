@@ -811,7 +811,9 @@ type CountTokensResponse struct {
 	InputTokens int `json:"input_tokens"`
 }
 
-// estimateTokens returns a rough estimate of tokens (len/4)
+// estimateTokens returns a rough estimate of tokens (len/4).
+// TODO: Replace with actual tokenization via Tokenize API for accuracy.
+// Current len/4 heuristic is a rough approximation (~4 chars/token average).
 func estimateTokens(req CountTokensRequest) int {
 	var totalLen int
 
@@ -891,12 +893,6 @@ func countContentBlock(block any) int {
 
 	if blockType == "tool_result" {
 		if data, err := json.Marshal(blockMap); err == nil {
-			total += len(data)
-		}
-	}
-
-	if source, ok := blockMap["source"].(map[string]any); ok {
-		if data, ok := source["data"].(string); ok {
 			total += len(data)
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/ollama/ollama/ml/nn/rope"
 	"github.com/ollama/ollama/model"
 	"github.com/ollama/ollama/model/input"
+	"github.com/ollama/ollama/tokenizer"
 )
 
 // Options contains model configuration
@@ -135,7 +136,7 @@ func (mlp *sparse) Forward(ctx ml.Context, hiddenStates ml.Tensor, opts *Options
 		// Apply shared expert gating
 		if mlp.SharedGateInp != nil {
 			sharedGateVal := mlp.SharedGateInp.Forward(ctx, hiddenStates2D)
-			sharedGateVal = sharedGateVal.Sigmoid(ctx)
+			sharedGateVal = sharedGateVal.SigmoidOut(ctx)
 			// Broadcast gate to match dimensions
 			sharedGateVal = sharedGateVal.Repeat(ctx, 0, sharedOut.Dim(0))
 			sharedOut = sharedOut.Mul(ctx, sharedGateVal)
@@ -207,7 +208,7 @@ func (l *Layer) Forward(ctx ml.Context, layer int, hiddenStates, positions, outp
 // Model is the main Qwen3-Next model
 type Model struct {
 	model.Base
-	model.BytePairEncoding
+	tokenizer.Tokenizer
 
 	TokenEmbedding *nn.Embedding `gguf:"token_embd"`
 	OutputNorm     *nn.RMSNorm   `gguf:"output_norm"`
@@ -353,8 +354,8 @@ func New(c fs.Config) (model.Model, error) {
 	}
 
 	m := Model{
-		BytePairEncoding: model.NewBytePairEncoding(
-			&model.Vocabulary{
+		Tokenizer: tokenizer.NewBytePairEncoding(
+			&tokenizer.Vocabulary{
 				Values: c.Strings("tokenizer.ggml.tokens"),
 				Types:  c.Ints("tokenizer.ggml.token_type"),
 				Merges: c.Strings("tokenizer.ggml.merges"),

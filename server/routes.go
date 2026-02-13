@@ -38,6 +38,7 @@ import (
 	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/format"
 	"github.com/ollama/ollama/fs/ggml"
+	internalcloud "github.com/ollama/ollama/internal/cloud"
 	"github.com/ollama/ollama/llm"
 	"github.com/ollama/ollama/logutil"
 	"github.com/ollama/ollama/manifest"
@@ -52,11 +53,16 @@ import (
 	"github.com/ollama/ollama/types/errtypes"
 	"github.com/ollama/ollama/types/model"
 	"github.com/ollama/ollama/version"
-	"github.com/ollama/ollama/x/imagegen"
+	imagegenmanifest "github.com/ollama/ollama/x/imagegen/manifest"
 	xserver "github.com/ollama/ollama/x/server"
 )
 
 const signinURLStr = "https://ollama.com/connect?name=%s&key=%s"
+
+const (
+	cloudErrRemoteInferenceUnavailable    = "remote model is unavailable"
+	cloudErrRemoteModelDetailsUnavailable = "remote model details are unavailable"
+)
 
 func shouldUseHarmony(model *Model) bool {
 	if slices.Contains([]string{"gptoss", "gpt-oss"}, model.Config.ModelFamily) {
@@ -83,7 +89,7 @@ type Server struct {
 	sched         *Scheduler
 	defaultNumCtx int
 	aliasesOnce   sync.Once
-	aliases       *aliasStore
+	aliases       *store
 	aliasesErr    error
 }
 
@@ -195,7 +201,7 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 		return
 	}
 
-	resolvedName, _, err := s.resolveModelAliasName(name)
+	resolvedName, _, err := s.resolveAlias(name)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -229,6 +235,11 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 	}
 
 	if m.Config.RemoteHost != "" && m.Config.RemoteModel != "" {
+		if disabled, _ := internalcloud.Status(); disabled {
+			c.JSON(http.StatusForbidden, gin.H{"error": internalcloud.DisabledError(cloudErrRemoteInferenceUnavailable)})
+			return
+		}
+
 		origModel := req.Model
 
 		remoteURL, err := url.Parse(m.Config.RemoteHost)
@@ -1066,9 +1077,12 @@ func (s *Server) ShowHandler(c *gin.Context) {
 
 	resp, err := GetModelInfo(req)
 	if err != nil {
+		var statusErr api.StatusError
 		switch {
 		case os.IsNotExist(err):
 			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("model '%s' not found", req.Model)})
+		case errors.As(err, &statusErr):
+			c.JSON(statusErr.StatusCode, gin.H{"error": statusErr.ErrorMessage})
 		case err.Error() == errtypes.InvalidModelNameErrMsg:
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		default:
@@ -1095,6 +1109,15 @@ func GetModelInfo(req api.ShowRequest) (*api.ShowResponse, error) {
 		return nil, err
 	}
 
+	if m.Config.RemoteHost != "" {
+		if disabled, _ := internalcloud.Status(); disabled {
+			return nil, api.StatusError{
+				StatusCode:   http.StatusForbidden,
+				ErrorMessage: internalcloud.DisabledError(cloudErrRemoteModelDetailsUnavailable),
+			}
+		}
+	}
+
 	modelDetails := api.ModelDetails{
 		ParentModel:       m.ParentModel,
 		Format:            m.Config.ModelFormat,
@@ -1106,7 +1129,7 @@ func GetModelInfo(req api.ShowRequest) (*api.ShowResponse, error) {
 
 	// For image generation models, populate details from imagegen package
 	if slices.Contains(m.Capabilities(), model.CapabilityImage) {
-		if info, err := imagegen.GetModelInfo(name.String()); err == nil {
+		if info, err := imagegenmanifest.GetModelInfo(name.String()); err == nil {
 			modelDetails.Family = info.Architecture
 			modelDetails.ParameterSize = format.HumanNumber(uint64(info.ParameterCount))
 			modelDetails.QuantizationLevel = info.Quantization
@@ -1571,6 +1594,7 @@ func (s *Server) GenerateRoutes(rc *ollama.Registry) (http.Handler, error) {
 	r.GET("/", func(c *gin.Context) { c.String(http.StatusOK, "Ollama is running") })
 	r.HEAD("/api/version", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"version": version.Version}) })
 	r.GET("/api/version", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"version": version.Version}) })
+	r.GET("/api/status", s.StatusHandler)
 
 	// Local model cache management (new implementation is at end of function)
 	r.POST("/api/pull", s.PullHandler)
@@ -1634,6 +1658,8 @@ func (s *Server) GenerateRoutes(rc *ollama.Registry) (http.Handler, error) {
 func Serve(ln net.Listener) error {
 	slog.SetDefault(logutil.NewLogger(os.Stderr, envconfig.LogLevel()))
 	slog.Info("server config", "env", envconfig.Values())
+	cloudDisabled, _ := internalcloud.Status()
+	slog.Info(fmt.Sprintf("Ollama cloud disabled: %t", cloudDisabled))
 
 	blobsDir, err := manifest.BlobsPath("")
 	if err != nil {
@@ -1824,6 +1850,16 @@ func streamResponse(c *gin.Context, ch chan any) {
 	})
 }
 
+func (s *Server) StatusHandler(c *gin.Context) {
+	disabled, source := internalcloud.Status()
+	c.JSON(http.StatusOK, api.StatusResponse{
+		Cloud: api.CloudStatus{
+			Disabled: disabled,
+			Source:   source,
+		},
+	})
+}
+
 func (s *Server) WhoamiHandler(c *gin.Context) {
 	// todo allow other hosts
 	u, err := url.Parse("https://ollama.com")
@@ -1964,7 +2000,7 @@ func (s *Server) ChatHandler(c *gin.Context) {
 		return
 	}
 
-	resolvedName, _, err := s.resolveModelAliasName(name)
+	resolvedName, _, err := s.resolveAlias(name)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -2010,6 +2046,11 @@ func (s *Server) ChatHandler(c *gin.Context) {
 	}
 
 	if m.Config.RemoteHost != "" && m.Config.RemoteModel != "" {
+		if disabled, _ := internalcloud.Status(); disabled {
+			c.JSON(http.StatusForbidden, gin.H{"error": internalcloud.DisabledError(cloudErrRemoteInferenceUnavailable)})
+			return
+		}
+
 		origModel := req.Model
 
 		remoteURL, err := url.Parse(m.Config.RemoteHost)
