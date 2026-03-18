@@ -15,7 +15,7 @@ set(CMAKE_INSTALL_RPATH "@loader_path")
 
 include(FetchContent)
 
-set(MLX_C_GIT_TAG "v0.4.1" CACHE STRING "")
+set(MLX_C_GIT_TAG "v0.5.0" CACHE STRING "")
 
 FetchContent_Declare(
   mlx-c
@@ -24,3 +24,7 @@ FetchContent_Declare(
 )
 
 FetchContent_MakeAvailable(mlx-c)
+
+# Sync vendored headers with fetched version
+file(GLOB _mlx_c_hdrs "${mlx-c_SOURCE_DIR}/mlx/c/*.h")
+file(COPY ${_mlx_c_hdrs} DESTINATION "${CMAKE_CURRENT_SOURCE_DIR}/include/mlx/c/")

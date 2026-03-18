@@ -1,10 +1,9 @@
-//go:build mlx
-
 package mlxrunner
 
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -28,6 +27,13 @@ func Execute(args []string) error {
 		return fmt.Errorf("MLX not available: %w", err)
 	}
 
+	if mlx.GPUIsAvailable() {
+		mlx.SetDefaultDeviceGPU()
+		slog.Info("MLX engine initialized", "MLX version", mlx.Version(), "device", "gpu")
+	} else {
+		slog.Info("MLX engine initialized", "MLX version", mlx.Version(), "device", "cpu")
+	}
+
 	var (
 		modelName string
 		port      int
@@ -40,8 +46,7 @@ func Execute(args []string) error {
 	flagSet.Parse(args)
 
 	runner := Runner{
-		Requests:     make(chan Request),
-		CacheEntries: make(map[int32]*CacheEntry),
+		Requests: make(chan Request),
 	}
 
 	if err := runner.Load(modelName); err != nil {
@@ -50,9 +55,11 @@ func Execute(args []string) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/status", func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewEncoder(w).Encode(map[string]any{
-			"status":   0,
-			"progress": 100,
+		if err := json.NewEncoder(w).Encode(statusResponse{
+			Status:        0,
+			Progress:      100,
+			ContextLength: runner.contextLength,
+			Memory:        uint64(mlx.ActiveMemory() + mlx.CacheMemory()),
 		}); err != nil {
 			slog.Error("Failed to encode response", "error", err)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -78,7 +85,7 @@ func Execute(args []string) error {
 	})
 
 	mux.HandleFunc("POST /v1/completions", func(w http.ResponseWriter, r *http.Request) {
-		request := Request{Responses: make(chan Response)}
+		request := Request{Responses: make(chan CompletionResponse)}
 
 		if err := json.NewDecoder(r.Body).Decode(&request.TextCompletionsRequest); err != nil {
 			slog.Error("Failed to decode request", "error", err)
@@ -87,9 +94,6 @@ func Execute(args []string) error {
 		}
 
 		request.Options.MaxTokens = cmp.Or(request.Options.MaxTokens, request.Options.NumPredict)
-		if request.Options.MaxTokens < 1 {
-			request.Options.MaxTokens = 16 << 10
-		}
 
 		request.Pipeline = runner.TextGenerationPipeline
 		request.Sampler = sample.New(
@@ -97,21 +101,40 @@ func Execute(args []string) error {
 			request.Options.TopP,
 			request.Options.MinP,
 			request.Options.TopK,
+			request.Options.RepeatLastN,
+			request.Options.PresencePenalty,
 		)
 
-		runner.Requests <- request
+		var cancel context.CancelFunc
+		request.Ctx, cancel = context.WithCancel(r.Context())
+		defer cancel()
+
+		select {
+		case <-r.Context().Done():
+			return
+		case runner.Requests <- request:
+		}
 
 		w.Header().Set("Content-Type", "application/jsonl")
 		w.WriteHeader(http.StatusOK)
 		enc := json.NewEncoder(w)
-		for response := range request.Responses {
-			if err := enc.Encode(response); err != nil {
-				slog.Error("Failed to encode response", "error", err)
+		for {
+			select {
+			case <-r.Context().Done():
 				return
-			}
+			case response, ok := <-request.Responses:
+				if !ok {
+					return
+				}
 
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
+				if err := enc.Encode(response); err != nil {
+					slog.Error("Failed to encode response", "error", err)
+					return
+				}
+
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
 			}
 		}
 	})
@@ -124,7 +147,7 @@ func Execute(args []string) error {
 			return
 		}
 
-		tokens := runner.Tokenizer.Encode(b.String(), true)
+		tokens := runner.Tokenizer.Encode(b.String(), runner.Tokenizer.AddBOS())
 
 		if err := json.NewEncoder(w).Encode(tokens); err != nil {
 			slog.Error("Failed to encode response", "error", err)
