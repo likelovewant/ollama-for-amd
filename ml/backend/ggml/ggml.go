@@ -1,7 +1,6 @@
 package ggml
 
 // #cgo linux LDFLAGS: -lrt -lpthread -ldl -lstdc++ -lm
-// #cgo windows LDFLAGS: -lpthread
 // #cgo CPPFLAGS: -I${SRCDIR}/ggml/include
 // #include <stdlib.h>
 // #include <stdint.h>
