@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ollama Simple Web UI</title>
+  <style>
+    :root {
+      --bg: #0c1117;
+      --bg-2: #111827;
+      --panel: #121a24;
+      --text: #e6edf5;
+      --muted: #91a0b3;
+      --accent: #22c55e;
+      --accent-2: #16a34a;
+      --border: #223144;
+      --user: #123047;
+      --assistant: #1f2f22;
+      --system: #182330;
+      --error: #3a1216;
+      --error-text: #ffb4bd;
+      --input: #0d141d;
+      --shadow: rgba(0, 0, 0, 0.4);
+    }
+
+    html[data-theme="light"] {
+      --bg: #f4f7fb;
+      --bg-2: #eef4ff;
+      --panel: #ffffff;
+      --text: #1b2430;
+      --muted: #6b7b8d;
+      --accent: #0b7285;
+      --accent-2: #0f9db5;
+      --border: #d7e0ea;
+      --user: #d7f3ff;
+      --assistant: #eef8e8;
+      --system: #f0f2f8;
+      --error: #ffe4e6;
+      --error-text: #7f1d1d;
+      --input: #ffffff;
+      --shadow: rgba(10, 40, 70, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: radial-gradient(circle at top right, #1a2538, var(--bg) 40%, var(--bg-2) 100%);
+      color: var(--text);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+    }
+
+    .app {
+      width: min(980px, 100%);
+      height: min(88vh, 920px);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: 0 18px 45px var(--shadow);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      overflow: hidden;
+    }
+
+    .topbar {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0));
+    }
+
+    .title {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    input[type="text"] {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 14px;
+      outline: none;
+      min-width: 240px;
+      background: var(--input);
+      color: var(--text);
+    }
+
+    input[type="text"]:focus,
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(11, 114, 133, 0.16);
+    }
+
+    button {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      color: white;
+      background: linear-gradient(120deg, var(--accent), var(--accent-2));
+    }
+
+    button.secondary {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+    }
+
+    .chat {
+      padding: 16px;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0));
+    }
+
+    .msg {
+      border-radius: 12px;
+      padding: 10px 12px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      max-width: 100%;
+      border: 1px solid var(--border);
+    }
+
+    .msg.user {
+      background: var(--user);
+      align-self: flex-end;
+    }
+
+    .msg.assistant {
+      background: var(--assistant);
+      align-self: flex-start;
+    }
+
+    .msg.system {
+      background: var(--system);
+      color: var(--muted);
+      align-self: center;
+      font-size: 13px;
+    }
+
+    .msg.error {
+      background: var(--error);
+      color: var(--error-text);
+      align-self: center;
+    }
+
+    .composer {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      border-top: 1px solid var(--border);
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 76px;
+      max-height: 220px;
+      resize: vertical;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 11px 12px;
+      font-size: 14px;
+      line-height: 1.35;
+      font-family: inherit;
+      background: var(--input);
+      color: var(--text);
+      outline: none;
+    }
+
+    .send-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .hint {
+      font-size: 12px;
+      color: var(--muted);
+      text-align: right;
+    }
+
+    @media (max-width: 760px) {
+      .app {
+        height: 94vh;
+      }
+
+      .topbar {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .controls {
+        width: 100%;
+      }
+
+      input[type="text"] {
+        min-width: 0;
+        width: 100%;
+      }
+
+      .composer {
+        grid-template-columns: 1fr;
+      }
+
+      .hint {
+        text-align: left;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="title">Ollama Simple Web UI</div>
+      <div class="controls">
+        <input id="api" type="text" value="http://127.0.0.1:11434" aria-label="Ollama API URL" />
+        <input id="model" type="text" value="qwen3.5:9b" aria-label="Model name" />
+        <button id="theme" class="secondary" type="button">Light</button>
+        <button id="check" class="secondary" type="button">Check API</button>
+        <button id="clear" class="secondary" type="button">Clear Chat</button>
+      </div>
+    </header>
+
+    <section id="chat" class="chat" aria-live="polite"></section>
+
+    <footer class="composer">
+      <textarea id="prompt" placeholder="Write your message and press Ctrl+Enter"></textarea>
+      <div class="send-wrap">
+        <button id="send" type="button">Send</button>
+        <div class="hint">Ctrl+Enter to send</div>
+      </div>
+    </footer>
+  </main>
+
+  <script>
+    const chatEl = document.getElementById('chat');
+    const promptEl = document.getElementById('prompt');
+    const modelEl = document.getElementById('model');
+    const apiEl = document.getElementById('api');
+    const sendBtn = document.getElementById('send');
+    const clearBtn = document.getElementById('clear');
+    const checkBtn = document.getElementById('check');
+    const themeBtn = document.getElementById('theme');
+
+    let messages = [];
+    let sending = false;
+
+    function normalizeBaseUrl(url) {
+      const trimmed = (url || '').trim();
+      return trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed;
+    }
+
+    function applyTheme(theme) {
+      const t = theme === 'light' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+      localStorage.setItem('simpleWebUiTheme', t);
+      themeBtn.textContent = t === 'dark' ? 'Light' : 'Dark';
+    }
+
+    function addMessage(role, text, kind = role) {
+      const el = document.createElement('div');
+      el.className = `msg ${kind}`;
+      el.textContent = text;
+      chatEl.appendChild(el);
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    async function checkApi() {
+      const base = normalizeBaseUrl(apiEl.value);
+      try {
+        const r = await fetch(`${base}/api/tags`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        addMessage('system', `API OK. Models: ${data.models?.length ?? 0}`, 'system');
+      } catch (err) {
+        addMessage('system', `API check failed: ${err.message}`, 'error');
+      }
+    }
+
+    async function sendMessage() {
+      if (sending) return;
+      const content = promptEl.value.trim();
+      if (!content) return;
+
+      const model = modelEl.value.trim();
+      const base = normalizeBaseUrl(apiEl.value);
+
+      if (!model) {
+        addMessage('system', 'Model is required.', 'error');
+        return;
+      }
+
+      messages.push({ role: 'user', content });
+      addMessage('user', content, 'user');
+      promptEl.value = '';
+
+      sending = true;
+      sendBtn.disabled = true;
+      sendBtn.textContent = 'Sending...';
+
+      try {
+        const r = await fetch(`${base}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model,
+            messages,
+            stream: false,
+          }),
+        });
+
+        if (!r.ok) {
+          const text = await r.text();
+          throw new Error(`HTTP ${r.status} ${text}`);
+        }
+
+        const data = await r.json();
+        const answer = data?.message?.content ?? '(empty response)';
+        messages.push({ role: 'assistant', content: answer });
+        addMessage('assistant', answer, 'assistant');
+      } catch (err) {
+        addMessage('system', `Request failed: ${err.message}`, 'error');
+      } finally {
+        sending = false;
+        sendBtn.disabled = false;
+        sendBtn.textContent = 'Send';
+      }
+    }
+
+    sendBtn.addEventListener('click', sendMessage);
+    clearBtn.addEventListener('click', () => {
+      messages = [];
+      chatEl.innerHTML = '';
+      addMessage('system', 'Chat cleared.', 'system');
+    });
+    checkBtn.addEventListener('click', checkApi);
+    themeBtn.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme') || 'dark';
+      applyTheme(current === 'dark' ? 'light' : 'dark');
+    });
+
+    promptEl.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    applyTheme(localStorage.getItem('simpleWebUiTheme') || 'dark');
+    addMessage('system', 'Ready. Click Check API, then start chatting.', 'system');
+  </script>
+</body>
+</html>
