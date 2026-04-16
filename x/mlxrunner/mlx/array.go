@@ -27,7 +27,11 @@ var arrays []*Array
 
 func New(name string) *Array {
 	t := &Array{name: name}
-	arrays = append(arrays, t)
+	if tracing {
+		traceScratch = append(traceScratch, t)
+	} else {
+		arrays = append(arrays, t)
+	}
 	return t
 }
 
@@ -137,6 +141,9 @@ func Unpin(s ...*Array) {
 	for _, t := range s {
 		if t != nil {
 			t.pinned--
+			if t.pinned < 0 {
+				panic(fmt.Sprintf("mlx.Unpin: negative pin count on array %q", t.name))
+			}
 		}
 	}
 }
@@ -259,9 +266,11 @@ func LogArrays() {
 		return arrays[i].NumBytes() > arrays[j].NumBytes()
 	})
 
+	var total int
 	for _, t := range arrays {
 		nb := t.NumBytes()
-		logutil.Trace(fmt.Sprintf("tensor %-60s %5s %5s %v", t.name, t.DType(), PrettyBytes(nb), t.Dims()))
+		total += nb
+		logutil.Trace(fmt.Sprintf("tensor %-60s %5s %5s pinned=%d %v", t.name, t.DType(), PrettyBytes(nb), t.pinned, t.Dims()))
 	}
-	logutil.Trace(fmt.Sprintf("tensors total: %d, size: %s", len(arrays), PrettyBytes(ActiveMemory())))
+	logutil.Trace(fmt.Sprintf("tensors total: %d, size: %s, active: %s", len(arrays), PrettyBytes(total), PrettyBytes(ActiveMemory())))
 }

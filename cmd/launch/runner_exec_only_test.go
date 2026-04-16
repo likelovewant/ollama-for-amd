@@ -26,7 +26,7 @@ func TestEditorRunsDoNotRewriteConfig(t *testing.T) {
 			binary: "opencode",
 			runner: &OpenCode{},
 			checkPath: func(home string) string {
-				return filepath.Join(home, ".config", "opencode", "opencode.json")
+				return filepath.Join(home, ".local", "state", "opencode", "model.json")
 			},
 		},
 		{
@@ -54,6 +54,9 @@ func TestEditorRunsDoNotRewriteConfig(t *testing.T) {
 
 			binDir := t.TempDir()
 			writeFakeBinary(t, binDir, tt.binary)
+			if tt.name == "pi" {
+				writeFakeBinary(t, binDir, "npm")
+			}
 			t.Setenv("PATH", binDir)
 
 			configPath := tt.checkPath(home)
