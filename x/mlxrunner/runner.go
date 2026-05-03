@@ -18,36 +18,25 @@ import (
 	"github.com/ollama/ollama/x/tokenizer"
 )
 
+// Request is a short-lived struct that carries a completion request through
+// a channel from the HTTP handler to the runner goroutine. The ctx field
+// must travel with the request so that cancellation propagates across the
+// channel boundary.
 type Request struct {
-	TextCompletionsRequest
+	CompletionRequest
 	Responses chan CompletionResponse
-	Pipeline  func(Request) error
+	Pipeline  func(context.Context, Request) error
 
-	Ctx context.Context
-
-	Sampler *sample.Sampler
-}
-
-type TextCompletionsRequest struct {
-	Prompt  string `json:"prompt"`
-	Options struct {
-		Temperature     float32 `json:"temperature"`
-		TopP            float32 `json:"top_p"`
-		MinP            float32 `json:"min_p"`
-		TopK            int     `json:"top_k"`
-		RepeatLastN     int     `json:"repeat_last_n"`
-		PresencePenalty float32 `json:"presence_penalty"`
-		MaxTokens       int     `json:"max_tokens"`
-
-		// Deprecated: use MaxTokens instead
-		NumPredict int `json:"num_predict"`
-	} `json:"options"`
+	Ctx         context.Context //nolint:containedctx
+	Tokens      []int32
+	SamplerOpts sample.Options
 }
 
 type Runner struct {
 	Model         base.Model
 	Tokenizer     *tokenizer.Tokenizer
 	Requests      chan Request
+	Sampler       *sample.Sampler
 	cache         kvCache
 	contextLength int
 }
@@ -79,6 +68,7 @@ func (r *Runner) Load(modelName string) error {
 	r.Model = m
 	r.Tokenizer = m.Tokenizer()
 	r.contextLength = m.MaxContextLength()
+	r.Sampler = sample.New(r.contextLength)
 
 	mlx.EnableCompile()
 	return nil
@@ -147,7 +137,7 @@ func (r *Runner) Run(host, port string, mux http.Handler) error {
 			case <-ctx.Done():
 				return nil
 			case request := <-r.Requests:
-				if err := request.Pipeline(request); err != nil {
+				if err := request.Pipeline(request.Ctx, request); err != nil {
 					slog.Info("Request terminated", "error", err)
 					var statusErr api.StatusError
 					if !errors.As(err, &statusErr) {
