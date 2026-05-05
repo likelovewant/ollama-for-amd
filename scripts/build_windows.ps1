@@ -45,11 +45,15 @@ function checkEnv {
         Write-Output "No CUDA versions detected"
     }
 
-    # Locate ROCm v6
-    $rocmDir=(get-item "C:\Program Files\AMD\ROCm\6.*" -ea 'silentlycontinue' | sort-object -Descending | select-object -First 1)
+    # Prefer ROCm v6, but fall back to v5 for community gfx1032 builds.
+    $rocmCandidates=@(
+        @(get-item "C:\Program Files\AMD\ROCm\6.*" -ea 'silentlycontinue')
+        @(get-item "C:\Program Files\AMD\ROCm\5.*" -ea 'silentlycontinue')
+    ) | ForEach-Object { $_ }
+    $rocmDir=($rocmCandidates | sort-object -Descending | select-object -First 1)
     if ($null -ne $rocmDir) {
         $script:HIP_PATH=$rocmDir.FullName
-    } elseif ($null -ne $env:HIP_PATH -and $env:HIP_PATH -match '[/\\]6\.') {
+    } elseif ($null -ne $env:HIP_PATH -and $env:HIP_PATH -match '[/\\](5|6)\.') {
         $script:HIP_PATH=$env:HIP_PATH
     }
     
@@ -210,18 +214,27 @@ function rocm6 {
     if ($script:ARCH -ne "arm64") {
         if ($script:HIP_PATH) {
             Write-Output "Building ROCm backend libraries $script:HIP_PATH"
+            # Avoid stale CMake cache (e.g. old ROCm paths) when switching HIP versions.
+            Remove-Item -ErrorAction SilentlyContinue -Recurse -Force -Path "build\rocm"
             if (-Not (get-command -ErrorAction silent ninja)) {
                 $NINJA_DIR=(gci -path (Get-CimInstance MSFT_VSInstance -Namespace root/cimv2/vs)[0].InstallLocation -r -fi ninja.exe).Directory.FullName
                 $env:PATH="$NINJA_DIR;$env:PATH"
             }
+            $prevHipPath=$env:HIP_PATH
+            $prevRocmPath=$env:ROCM_PATH
             $env:HIPCXX="${script:HIP_PATH}\bin\clang++.exe"
             $env:HIP_PLATFORM="amd"
+            $env:HIP_PATH="${script:HIP_PATH}"
+            $env:ROCM_PATH="${script:HIP_PATH}"
             $env:CMAKE_PREFIX_PATH="${script:HIP_PATH}"
             # Set CC/CXX via environment instead of -D flags to avoid triggering
             # spurious compiler-change reconfigures that reset CMAKE_INSTALL_PREFIX
             $env:CC="${script:HIP_PATH}\bin\clang.exe"
             $env:CXX="${script:HIP_PATH}\bin\clang++.exe"
+            $hipCompiler="${script:HIP_PATH}\bin\hipcc.bat"
             & cmake -B build\rocm --preset "ROCm 6" -G Ninja `
+                -DCMAKE_HIP_COMPILER="$hipCompiler" `
+                -DCMAKE_HIP_COMPILER_ROCM_ROOT="${script:HIP_PATH}" `
                 -DCMAKE_C_FLAGS="-parallel-jobs=4 -Wno-ignored-attributes -Wno-deprecated-pragma" `
                 -DCMAKE_CXX_FLAGS="-parallel-jobs=4 -Wno-ignored-attributes -Wno-deprecated-pragma" `
                 --install-prefix $script:DIST_DIR
@@ -231,6 +244,8 @@ function rocm6 {
             $env:CMAKE_PREFIX_PATH=""
             $env:CC=""
             $env:CXX=""
+            $env:HIP_PATH=$prevHipPath
+            $env:ROCM_PATH=$prevRocmPath
             & cmake --build build\rocm --target ggml-hip --config Release --parallel $script:JOBS
             if ($LASTEXITCODE -ne 0) { exit($LASTEXITCODE)}
             & cmake --install build\rocm --component "HIP" --strip
@@ -317,7 +332,32 @@ function mlxCuda13 {
 function ollama {
     mkdir -Force -path "${script:DIST_DIR}\" | Out-Null
     Write-Output "Building ollama CLI"
+    $prevCC=$env:CC
+    $prevCXX=$env:CXX
+    $prevPath=$env:PATH
+    $clangBinDir=$null
+    if ($script:HIP_PATH -and (Test-Path "${script:HIP_PATH}\bin\clang.exe")) {
+        $clangBinDir="${script:HIP_PATH}\bin"
+        $env:PATH="$clangBinDir;$env:PATH"
+    }
+    if (-not $env:CC) {
+        if (Get-Command gcc -ErrorAction SilentlyContinue) {
+            $env:CC="gcc"
+        } elseif (Get-Command clang -ErrorAction SilentlyContinue) {
+            $env:CC="clang"
+        }
+    }
+    if (-not $env:CXX) {
+        if (Get-Command g++ -ErrorAction SilentlyContinue) {
+            $env:CXX="g++"
+        } elseif (Get-Command clang++ -ErrorAction SilentlyContinue) {
+            $env:CXX="clang++"
+        }
+    }
     & go build -trimpath -ldflags "-s -w -X=github.com/ollama/ollama/version.Version=$script:VERSION -X=github.com/ollama/ollama/server.mode=release" .
+    $env:CC=$prevCC
+    $env:CXX=$prevCXX
+    $env:PATH=$prevPath
     if ($LASTEXITCODE -ne 0) { exit($LASTEXITCODE)}
     cp .\ollama.exe "${script:DIST_DIR}\"
 }
