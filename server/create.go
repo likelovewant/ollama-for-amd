@@ -271,6 +271,8 @@ func (s *Server) CreateHandler(c *gin.Context) {
 			}
 		}
 
+		s.refreshModelListCache(name)
+
 		ch <- api.ProgressResponse{Status: "success"}
 	}()
 
@@ -738,9 +740,6 @@ func removeLayer(layers []manifest.Layer, mediatype string) []manifest.Layer {
 
 func setTemplate(layers []manifest.Layer, t string) ([]manifest.Layer, error) {
 	layers = removeLayer(layers, "application/vnd.ollama.image.template")
-	if _, err := template.Parse(t); err != nil {
-		return nil, fmt.Errorf("%w: %s", errBadTemplate, err)
-	}
 	if _, err := template.Parse(t); err != nil {
 		return nil, fmt.Errorf("%w: %s", errBadTemplate, err)
 	}
