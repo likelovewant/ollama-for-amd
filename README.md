@@ -99,10 +99,10 @@ ollama launch openclaw
 
 ### Chat with a model
 
-Run and chat with [Gemma 3](https://ollama.com/library/gemma3):
+Run and chat with [Gemma 4](https://ollama.com/library/gemma4):
 
 ```
-ollama run gemma3
+ollama run gemma4
 ```
 
 See [ollama.com/library](https://ollama.com/library) for the full list.
@@ -115,7 +115,7 @@ Ollama has a REST API for running and managing models.
 
 ```
 curl http://localhost:11434/api/chat -d '{
-  "model": "gemma3",
+  "model": "gemma4",
   "messages": [{
     "role": "user",
     "content": "Why is the sky blue?"
@@ -135,7 +135,7 @@ pip install ollama
 ```python
 from ollama import chat
 
-response = chat(model='gemma3', messages=[
+response = chat(model='gemma4', messages=[
   {
     'role': 'user',
     'content': 'Why is the sky blue?',
@@ -154,7 +154,7 @@ npm i ollama
 import ollama from "ollama";
 
 const response = await ollama.chat({
-  model: "gemma3",
+  model: "gemma4",
   messages: [{ role: "user", content: "Why is the sky blue?" }],
 });
 console.log(response.message.content);
