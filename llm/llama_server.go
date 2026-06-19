@@ -273,13 +273,16 @@ func (s *llamaServerRunner) completionPromptForRequest(ctx context.Context, req 
 		return nil, err
 	}
 
-	// llama-server rejects prompts that fill the entire slot context, while the
-	// old runner could accept exactly num_ctx prompt tokens. Keep one token of
-	// headroom so token-level truncation preserves old behavior as closely as
-	// llama-server allows.
 	limit := s.options.NumCtx - 1
 	if len(tokens) <= limit {
 		return prompt, nil
+	}
+
+	if !s.launch.config.ContextShift {
+		return nil, api.StatusError{
+			StatusCode:   http.StatusBadRequest,
+			ErrorMessage: "the prompt is longer than the context length currently available to the model; shorten the prompt, adjust the context length in settings, or use a model with a longer context length",
+		}
 	}
 
 	nKeep := req.Options.NumKeep
@@ -293,7 +296,7 @@ func (s *llamaServerRunner) completionPromptForRequest(ctx context.Context, req 
 	truncated = append(truncated, tokens[:nKeep]...)
 	truncated = append(truncated, tokens[nKeep+discard:]...)
 
-	slog.Warn("truncating input prompt", "limit", s.options.NumCtx, "prompt", len(tokens), "keep", nKeep, "new", len(truncated))
+	slog.Warn("truncating input prompt", "limit", limit, "prompt", len(tokens), "keep", nKeep, "new", len(truncated))
 	return truncated, nil
 }
 
